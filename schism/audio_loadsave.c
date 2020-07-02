@@ -41,6 +41,9 @@
 #include "midi.h"
 #include "disko.h"
 
+#include <yaml.h>
+
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -490,7 +493,7 @@ static void _save_it_instrument(int n, disko_t *fp, int iti_file)
 	}
 }
 
-// NOBODY expects the Spanish Inquisition!
+ // NOBODY expects the Spanish Inquisition!
 static void _save_it_pattern(disko_t *fp, song_note_t *pat, int patsize)
 {
 	song_note_t *noteptr = pat;
@@ -805,9 +808,486 @@ static int _save_it(disko_t *fp, UNUSED song_t *song)
 
 /* ------------------------------------------------------------------------- */
 
+
+static int _save_git(disko_t *fp, UNUSED song_t *song)
+{
+	printf("you're not supposed to be here -levelord\n");
+}
+
+static void addkeyvalue_item(yaml_document_t* document, int mapping, char* key, const int item)
+{
+	//int mapping = yaml_document_add_mapping(document, NULL, YAML_ANY_MAPPING_STYLE);
+	int arvo1 = yaml_document_add_scalar(document, NULL, key, strlen(key), YAML_ANY_SCALAR_STYLE);
+
+	yaml_document_append_mapping_pair(document, mapping, arvo1, item);
+	//yaml_document_append_sequence_item(document, seq, mapping);
+}
+
+
+static void addkeyvalue(yaml_document_t* document, int mapping, char* key, char* value)
+{
+	int arvo1 = yaml_document_add_scalar(document, NULL, key, strlen(key), YAML_ANY_SCALAR_STYLE);
+	int arvo2 = yaml_document_add_scalar(document, NULL, value, strlen(value), YAML_ANY_SCALAR_STYLE);
+
+	yaml_document_append_mapping_pair(document, mapping, arvo1, arvo2);
+}
+
+static void addkeyvalue_int(yaml_document_t* document, int seq, char* key, const int value)
+{
+	char valstr[128];
+	sprintf(valstr, "%d", value);
+	addkeyvalue(document, seq, key, valstr);
+}
+
+static void addkeyvalue_bool(yaml_document_t* document, int seq, char* key, const bool value)
+{
+	addkeyvalue(document, seq, key, value ? "yes" : "no");
+}
+
+static void addkeyvalue_int_nozero(yaml_document_t* document, int seq, char* key, const int value)
+{
+	if (value == 0)
+		return;
+	char valstr[128];
+	sprintf(valstr, "%d", value);
+	addkeyvalue(document, seq, key, valstr);
+}
+
+static void addkeyvalue_bool_nozero(yaml_document_t* document, int seq, char* key, const bool value)
+{
+	if (value == false)
+		return;
+	addkeyvalue(document, seq, key, value ? "yes" : "no");
+}
+
+char str[4096];
+int curstridx = 0;
+
+char* strf(const char *fmt, ...)
+{
+	char* retptr = str + curstridx;
+	va_list args;
+	va_start (args, fmt);
+	int len = vsprintf(retptr, fmt, args);
+	va_end (args);
+	if (len > 95) // bogus
+	{
+		printf("WOOP STRF OVERFLOW\n");
+		exit(1);
+	}
+	curstridx += len + 1;
+	if (curstridx > 4000)
+		curstridx = 0;
+
+	return retptr;
+}
+
+int yaml_document_add_scalar_strlen 	( 	yaml_document_t *  	document,
+		yaml_char_t *  	tag,
+		yaml_char_t *  	value,
+		yaml_scalar_style_t  	style	 
+	) 			
+{
+	//printf("%s, len %d\n", value, strlen(value));
+	return yaml_document_add_scalar(document, tag, value, strlen(value), style);
+}
+
+
+static void addenvelope(yaml_document_t *  	document, int mapping, char *name,
+			bool envactive,
+			bool loop,
+			bool sustain,
+			bool carry,
+			bool filter,
+			song_envelope_t* env,
+
+			bool bi_envactive,
+			bool bi_loop,
+			bool bi_sustain,
+			bool bi_carry,
+			bool bi_filter,
+			song_envelope_t* bi_env
+
+			)
+{
+		int filtermap = yaml_document_add_mapping(document, NULL, YAML_ANY_MAPPING_STYLE);
+
+		if (bi_envactive != envactive)
+			addkeyvalue_bool(document, filtermap, "active", envactive);
+		if (bi_loop != loop)
+			addkeyvalue_bool(document, filtermap, "loop", loop);
+		if (bi_sustain != sustain)
+			addkeyvalue_bool(document, filtermap, "sustain", sustain);
+		if (bi_carry != carry)
+			addkeyvalue_bool(document, filtermap, "carry", carry);
+		if (bi_filter != filter)
+			addkeyvalue_bool(document, filtermap, "filter", filter);
+
+		bool includeenv = false;
+		includeenv |= bi_env->nodes != env->nodes;
+		for (int j = 0; j < env->nodes; j++) {
+			if (bi_env->ticks[j] != env->ticks[j])
+				includeenv = true;
+			if (bi_env->values[j] != env->values[j])
+				includeenv = true;
+		}
+
+		if (includeenv)
+			addkeyvalue_int(document, filtermap, "nodes", env->nodes);
+		if (bi_env->loop_start != env->loop_start)
+			addkeyvalue_int(document, filtermap, "loop start", env->loop_start);
+		if (bi_env->loop_end != env->loop_end)
+			addkeyvalue_int(document, filtermap, "loop end", env->loop_end);
+		if (bi_env->sustain_start != env->sustain_start)
+			addkeyvalue_int(document, filtermap, "sustain start", env->sustain_start);
+		if (bi_env->sustain_end != env->sustain_end)
+			addkeyvalue_int(document, filtermap, "sustain end", env->sustain_end);
+
+		if (includeenv)
+		{
+			int envseq = yaml_document_add_sequence(document, NULL, YAML_ANY_SEQUENCE_STYLE);
+			for (int j = 0; j < env->nodes; j++) {
+				int arvo1 = yaml_document_add_scalar_strlen(document, NULL, strf("%d", env->ticks[j]), YAML_ANY_SCALAR_STYLE);
+				int arvo2 = yaml_document_add_scalar_strlen(document, NULL, strf("%d", env->values[j]), YAML_ANY_SCALAR_STYLE);
+				int keyvalpair = yaml_document_add_mapping(document, NULL, YAML_ANY_MAPPING_STYLE);
+
+				yaml_document_append_mapping_pair(document, keyvalpair, arvo1, arvo2);
+				yaml_document_append_sequence_item(document, envseq, keyvalpair);
+			}	
+			addkeyvalue_item(document, filtermap, "nodes", envseq);
+		}
+
+		addkeyvalue_item(document, mapping, name, filtermap);
+}
+
+static int git_saver(char *fn, UNUSED song_t *song)
+{
+	FILE *file2;
+
+	yaml_document_t document;
+	yaml_document_initialize(&document, NULL, NULL, NULL, 1, 1);
+
+	//yaml_document_add_scalar (yaml_document_t *document, yaml_char_t *tag, yaml_char_t *value, int length, yaml_scalar_style_t style)
+
+
+	//int rootseq = yaml_document_add_sequence(&document, NULL, YAML_ANY_SEQUENCE_STYLE);
+	int mapping = yaml_document_add_mapping(&document, NULL, YAML_ANY_MAPPING_STYLE);
+	//yaml_document_append_sequence_item(&document, rootseq, mapping);
+
+
+	addkeyvalue(&document, mapping, "format", "Gimpulse0");
+	addkeyvalue(&document, mapping, "title", current_song->title);
+	addkeyvalue_int(&document, mapping, "row highlight major", current_song->row_highlight_major);
+	addkeyvalue_int(&document, mapping, "row highlight minor", current_song->row_highlight_minor);
+
+	addkeyvalue_bool(&document, mapping, "stereo", song_is_stereo());
+	addkeyvalue_bool(&document, mapping, "instrument mode", song_is_instrument_mode());
+	addkeyvalue_bool(&document, mapping, "linear pitch slides", song_has_linear_pitch_slides());
+	addkeyvalue_bool(&document, mapping, "old effects", song_has_old_effects());
+	addkeyvalue_bool(&document, mapping, "compatible gxx", song_has_compatible_gxx());
+
+	addkeyvalue_int(&document, mapping, "global volume", current_song->initial_global_volume);
+	addkeyvalue_int(&document, mapping, "mixing volume", current_song->mixing_volume);
+	addkeyvalue_int(&document, mapping, "speed", current_song->initial_speed);
+	addkeyvalue_int(&document, mapping, "tempo", current_song->initial_tempo);
+	addkeyvalue_int(&document, mapping, "pan separation", current_song->pan_separation);
+
+	int chanseq = yaml_document_add_sequence(&document, NULL, YAML_ANY_SEQUENCE_STYLE);
+	for (int n = 0; n < 64; n++) {
+		int chnpan;
+		int chnvol;
+		chnpan = ((current_song->channels[n].flags & CHN_SURROUND)
+				 ? 100 : (current_song->channels[n].panning / 4));
+		chnvol = current_song->channels[n].volume;
+		if (current_song->channels[n].flags & CHN_MUTE)
+			chnpan += 128;
+
+//		if (chnvol == 64 && chnpan == 32)
+//			continue;
+
+		int volpanseq = yaml_document_add_sequence(&document, NULL, YAML_ANY_SEQUENCE_STYLE);
+		int arvo1 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", n), YAML_ANY_SCALAR_STYLE);
+		int keyvalpair = yaml_document_add_mapping(&document, NULL, YAML_ANY_MAPPING_STYLE);
+
+		int arvo2 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", chnvol), YAML_ANY_SCALAR_STYLE);
+		int arvo3 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", chnpan), YAML_ANY_SCALAR_STYLE);
+
+		yaml_document_append_mapping_pair(&document, keyvalpair, arvo1, volpanseq);
+
+		yaml_document_append_sequence_item(&document, volpanseq, arvo2);
+		yaml_document_append_sequence_item(&document, volpanseq, arvo3);
+		yaml_document_append_sequence_item(&document, chanseq, keyvalpair);
+		//yaml_document_append_sequence_item(&document, chanseq, volpanseq);
+	}
+	addkeyvalue_item(&document, mapping, "channels", chanseq);
+
+	// TODO: add edit history saving?
+
+	if (current_song->flags & SONG_EMBEDMIDICFG) {
+		int arvo = yaml_document_add_scalar(&document, NULL, (yaml_char_t*)&current_song->midi_config, sizeof(current_song->midi_config), YAML_ANY_SCALAR_STYLE);
+		addkeyvalue_item(&document, mapping, "midiconfig", arvo);
+	}
+
+	addkeyvalue(&document, mapping, "message", current_song->message);
+
+	int orderseq = yaml_document_add_sequence(&document, NULL, YAML_ANY_SEQUENCE_STYLE);
+	for (int n = 0; n < csf_get_num_orders(current_song); n++) {
+		int arvo1 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", n), YAML_ANY_SCALAR_STYLE);
+		int arvo2 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", current_song->orderlist[n]), YAML_ANY_SCALAR_STYLE);
+		int keyvalpair = yaml_document_add_mapping(&document, NULL, YAML_ANY_MAPPING_STYLE);
+
+		yaml_document_append_mapping_pair(&document, keyvalpair, arvo1, arvo2);
+		yaml_document_append_sequence_item(&document, orderseq, keyvalpair);
+	}
+	addkeyvalue_item(&document, mapping, "orderlist", orderseq);
+
+/*
+	nins = csf_get_num_instruments(current_song);
+	nsmp = csf_get_num_samples(current_song);
+
+	// IT always saves at least one pattern.
+	npat = csf_get_num_patterns(current_song) ?: 1;
+*/
+
+	// TODO: clean up this blank instrument crap. it's actually just zeros, so just use _nozero functions!
+	int instrseq = yaml_document_add_sequence(&document, NULL, YAML_ANY_SEQUENCE_STYLE);
+	for (int n = 0; n < csf_get_num_instruments(current_song); n++)
+	{
+		song_instrument_t *i = current_song->instruments[n + 1];
+
+		if (!i)
+			continue;
+
+
+		int arvo1 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", n), YAML_ANY_SCALAR_STYLE);
+		int instrprops = yaml_document_add_mapping(&document, NULL, YAML_ANY_MAPPING_STYLE);
+		int keyvalpair = yaml_document_add_mapping(&document, NULL, YAML_ANY_MAPPING_STYLE);
+
+		yaml_document_append_mapping_pair(&document, keyvalpair, arvo1, instrprops);
+		yaml_document_append_sequence_item(&document, instrseq, keyvalpair);
+
+
+		char fntemp[13];
+		strncpy(fntemp, (char *) i->filename, 12);
+		fntemp[12] = 0;
+		if (strlen(fntemp) > 0)
+			addkeyvalue(&document, instrprops, "filename", fntemp);
+
+		if (blank_instrument.nna != i->nna)
+			addkeyvalue_int(&document, instrprops, "nna", i->nna);
+		if (blank_instrument.dct != i->dct)
+			addkeyvalue_int(&document, instrprops, "dct", i->dct);
+		if (blank_instrument.dca != i->dca)
+			addkeyvalue_int(&document, instrprops, "dca", i->dca);
+		if (blank_instrument.fadeout != i->fadeout)
+			addkeyvalue_int(&document, instrprops, "fadeout", i->fadeout >> 5);
+		if (blank_instrument.pitch_pan_separation != i->pitch_pan_separation)
+			addkeyvalue_int(&document, instrprops, "pitch pan separation", i->pitch_pan_separation);
+		if (blank_instrument.pitch_pan_center != i->pitch_pan_center)
+			addkeyvalue_int(&document, instrprops, "pitch pan center", i->pitch_pan_center);
+		if (blank_instrument.global_volume != i->global_volume)
+			addkeyvalue_int(&document, instrprops, "global volume", i->global_volume);
+		if (blank_instrument.panning != i->panning)
+			addkeyvalue_int(&document, instrprops, "panning", i->panning);
+		if (blank_instrument.flags & ENV_SETPANNING != i->flags & ENV_SETPANNING)
+			addkeyvalue_bool(&document, instrprops, "set panning", i->flags & ENV_SETPANNING);
+		if (blank_instrument.vol_swing != i->vol_swing)
+			addkeyvalue_int(&document, instrprops, "vol_swing", i->vol_swing);
+		if (blank_instrument.pan_swing != i->pan_swing)
+			addkeyvalue_int(&document, instrprops, "pan_swing", i->pan_swing);
+
+		char nmtemp[26];
+		strncpy(nmtemp, (char *) i->name, 25);
+		nmtemp[25] = 0;
+		if (strlen(nmtemp) > 0)
+			addkeyvalue(&document, instrprops, "name", nmtemp);
+
+		if (blank_instrument.ifc != i->ifc)
+			addkeyvalue_int(&document, instrprops, "ifc", i->ifc);
+		if (blank_instrument.ifr != i->ifr)
+			addkeyvalue_int(&document, instrprops, "ifr", i->ifr);
+		
+
+		if (blank_instrument.midi_channel_mask != i->midi_channel_mask)
+			addkeyvalue_int(&document, instrprops, "midi channel", i->midi_channel_mask);
+		if (blank_instrument.midi_program != i->midi_program)
+			addkeyvalue_int(&document, instrprops, "midi program", i->midi_program);
+		if (blank_instrument.midi_bank != i->midi_bank)
+			addkeyvalue_int(&document, instrprops, "midi bank", i->midi_bank);
+
+		int kbdseq = yaml_document_add_sequence(&document, NULL, YAML_ANY_SEQUENCE_STYLE);
+		int last_note_map = -1;
+		int last_sample_map = -1;
+		for (int j = 0; j < 120; j++) {
+			if (last_sample_map != i->sample_map[j])
+			{
+				last_note_map = i->note_map[j] - 1;
+				last_sample_map = i->sample_map[j];
+
+				int arvo1 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", last_note_map), YAML_ANY_SCALAR_STYLE);
+				int arvo2 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", last_sample_map), YAML_ANY_SCALAR_STYLE);
+				int keyvalpair = yaml_document_add_mapping(&document, NULL, YAML_ANY_MAPPING_STYLE);
+
+				yaml_document_append_mapping_pair(&document, keyvalpair, arvo1, arvo2);
+				yaml_document_append_sequence_item(&document, kbdseq, keyvalpair);
+			}
+		}
+		addkeyvalue_item(&document, instrprops, "keymappings", kbdseq);
+
+		addenvelope(&document, instrprops, "volume envelope",
+			i->flags & ENV_VOLUME,
+			i->flags & ENV_VOLLOOP,
+			i->flags & ENV_VOLSUSTAIN,
+			i->flags & ENV_VOLCARRY,
+			0,
+			&i->vol_env,
+			blank_instrument.flags & ENV_VOLUME,
+			blank_instrument.flags & ENV_VOLLOOP,
+			blank_instrument.flags & ENV_VOLSUSTAIN,
+			blank_instrument.flags & ENV_VOLCARRY,
+			0,
+			&blank_instrument.vol_env
+			);
+
+
+		addenvelope(&document, instrprops, "pan envelope",
+			i->flags & ENV_PANNING,
+			i->flags & ENV_PANLOOP,
+			i->flags & ENV_PANSUSTAIN,
+			i->flags & ENV_PANCARRY,
+			0,
+			&i->pan_env,
+			blank_instrument.flags & ENV_PANNING,
+			blank_instrument.flags & ENV_PANLOOP,
+			blank_instrument.flags & ENV_PANSUSTAIN,
+			blank_instrument.flags & ENV_PANCARRY,
+			0,
+			&blank_instrument.pan_env
+		);
+
+		addenvelope(&document, instrprops, "pitch envelope",
+			i->flags & ENV_PITCH,
+			i->flags & ENV_PITCHLOOP,
+			i->flags & ENV_PITCHSUSTAIN,
+			i->flags & ENV_PITCHCARRY,
+			i->flags & ENV_FILTER,
+			&i->pitch_env,
+			blank_instrument.flags & ENV_PITCH,
+			blank_instrument.flags & ENV_PITCHLOOP,
+			blank_instrument.flags & ENV_PITCHSUSTAIN,
+			blank_instrument.flags & ENV_PITCHCARRY,
+			blank_instrument.flags & ENV_FILTER,
+			&blank_instrument.pitch_env
+		);
+	}
+	addkeyvalue_item(&document, mapping, "instruments", instrseq);
+
+	int sampleseq = yaml_document_add_sequence(&document, NULL, YAML_ANY_SEQUENCE_STYLE);
+	for (int n = 0; n < csf_get_num_samples(current_song); n++)
+	{
+
+		song_sample_t* smp = current_song->samples + n + 1;
+
+		int arvo1 = yaml_document_add_scalar_strlen(&document, NULL, strf("%d", n), YAML_ANY_SCALAR_STYLE);
+		int sampleprops = yaml_document_add_mapping(&document, NULL, YAML_ANY_MAPPING_STYLE);
+		int keyvalpair = yaml_document_add_mapping(&document, NULL, YAML_ANY_MAPPING_STYLE);
+
+		yaml_document_append_mapping_pair(&document, keyvalpair, arvo1, sampleprops);
+		yaml_document_append_sequence_item(&document, sampleseq, keyvalpair);
+
+		char fntemp[13];
+		strncpy(fntemp, (char *) smp->filename, 12);
+		fntemp[12] = 0;
+		if (strlen(fntemp) > 0)
+			addkeyvalue(&document, sampleprops, "filename", fntemp);
+
+		addkeyvalue_int(&document, sampleprops, "global volume", smp->global_volume);
+		//addkeyvalue_bool(&document, sampleprops, "valid", smp->data && smp->length);
+		addkeyvalue_bool_nozero(&document, sampleprops, "16bit", smp->flags & CHN_16BIT);
+		addkeyvalue_bool_nozero(&document, sampleprops, "stereo", smp->flags & CHN_STEREO);
+		addkeyvalue_bool_nozero(&document, sampleprops, "loop", smp->flags & CHN_LOOP);
+		addkeyvalue_bool_nozero(&document, sampleprops, "sustainloop", smp->flags & CHN_SUSTAINLOOP);
+		addkeyvalue_bool_nozero(&document, sampleprops, "pingpongloop", smp->flags & CHN_PINGPONGLOOP);
+		addkeyvalue_bool_nozero(&document, sampleprops, "pingpongsustain", smp->flags & CHN_PINGPONGSUSTAIN);
+		addkeyvalue_int(&document, sampleprops, "volume", smp->volume);
+
+		char nmtemp[26];
+		strncpy(nmtemp, (char *) smp->name, 25);
+		nmtemp[25] = 0;
+		if (strlen(nmtemp) > 0)
+			addkeyvalue(&document, sampleprops, "name", nmtemp);
+
+		addkeyvalue_int_nozero(&document, sampleprops, "panning", smp->panning);
+		addkeyvalue_bool_nozero(&document, sampleprops, "default panning", smp->flags & CHN_PANNING);
+		addkeyvalue_int_nozero(&document, sampleprops, "length", smp->length);
+		addkeyvalue_int_nozero(&document, sampleprops, "loop start", smp->loop_start);
+		addkeyvalue_int_nozero(&document, sampleprops, "loop end", smp->loop_end);
+		addkeyvalue_int_nozero(&document, sampleprops, "c5 speed", smp->c5speed);
+		addkeyvalue_int_nozero(&document, sampleprops, "sustain start", smp->sustain_start);
+		addkeyvalue_int_nozero(&document, sampleprops, "sustain end", smp->sustain_end);
+		addkeyvalue_int_nozero(&document, sampleprops, "vibrato speed", smp->vib_speed);
+		addkeyvalue_int_nozero(&document, sampleprops, "vibrato rate", smp->vib_rate);
+		addkeyvalue_int_nozero(&document, sampleprops, "vibrato depth", smp->vib_depth);
+		addkeyvalue_int_nozero(&document, sampleprops, "vibrato type", smp->vib_type);
+
+		//int sampledata = yaml_document_add_scalar(&document, NULL, smp->data, smp->length, YAML_ANY_SCALAR_STYLE);
+		//int sampledata = yaml_document_add_scalar(&document, NULL, "hv", 2, YAML_ANY_SCALAR_STYLE);
+		//addkeyvalue_item(&document, sampleprops, "data", sampledata);
+
+
+/*
+
+	its.dfp = smp->panning / 4;
+	if (smp->flags & CHN_PANNING)
+		its.dfp |= 0x80;
+	its.length = bswapLE32(smp->length);
+	its.loopbegin = bswapLE32(smp->loop_start);
+	its.loopend = bswapLE32(smp->loop_end);
+	its.C5Speed = bswapLE32(smp->c5speed);
+	its.susloopbegin = bswapLE32(smp->sustain_start);
+	its.susloopend = bswapLE32(smp->sustain_end);
+	//its.samplepointer = 42; - this will be filled in later
+	its.vis = smp->vib_speed;
+	its.vir = smp->vib_rate;
+	its.vid = smp->vib_depth;
+	switch (smp->vib_type) {
+		case VIB_RANDOM:    its.vit = 3; break;
+		case VIB_SQUARE:    its.vit = 2; break;
+		case VIB_RAMP_DOWN: its.vit = 1; break;
+		default:
+		case VIB_SINE:      its.vit = 0; break;
+	}
+
+	disko_write(fp, &its, sizeof(its));
+*/
+	}
+	addkeyvalue_item(&document, mapping, "samples", sampleseq);
+
+
+
+	yaml_emitter_t emitter;
+	file2 = fopen(fn, "w");
+
+	yaml_emitter_initialize(&emitter);
+
+	yaml_emitter_set_output_file(&emitter, file2);
+
+	yaml_emitter_dump(&emitter, &document);
+	yaml_emitter_delete(&emitter);
+	fclose(file2);
+
+	yaml_document_delete(&document);
+
+
+}
+
+
+
+
 const struct save_format song_save_formats[] = {
 	{"IT", "Impulse Tracker", ".it", {.save_song = _save_it}},
 	{"S3M", "Scream Tracker 3", ".s3m", {.save_song = fmt_s3m_save_song}},
+	{"GIT", "Schism-GIT", ".git", {.save_song = _save_git}},
 	{.label = NULL}
 };
 
@@ -923,6 +1403,7 @@ int song_save(const char *filename, const char *type)
 	if (!format)
 		return SAVE_INTERNAL_ERROR;
 
+
 	mangle = mangle_filename(filename, NULL, format->ext);
 
 	log_nl();
@@ -954,6 +1435,13 @@ Another note: if the file could not be saved for some reason or another, Impulse
 saying "Could not save file". This can be seen rather easily by trying to save a file with a malformed name,
 such as "abc|def.it". This dialog is presented both when saving from F10 and Ctrl-S.
 */
+
+	if (format->f.save_song == _save_git)
+	{
+		git_saver(mangle, current_song);
+		return SAVE_SUCCESS;
+	}
+
 
 	disko_t *fp = disko_open(mangle);
 	if (!fp) {

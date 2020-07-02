@@ -95,6 +95,10 @@ dnl Always use x11 by default unless overriden later per-platform
 dnl (this is stupid, and only needed because the x11 check is dysfunctional)
 defaultx11=yes
 
+dnl en tiiä mitä vittua mutta tähän tää yaml libbi
+LIBS="$LIBS -lyaml"
+AC_SUBST(LIBS)
+
 
 dnl CoreMIDI (Mac OS X)
 AC_MSG_CHECKING(for CoreAudio/CoreMIDI Framework)

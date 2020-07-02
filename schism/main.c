@@ -199,6 +199,9 @@ static char *initial_dir = NULL;
 /* diskwrite? */
 static char *diskwrite_to = NULL;
 
+/* songsave? */
+static char *songsave_to = NULL;
+
 /* startup flags */
 enum {
 	SF_PLAY = 1, /* -p: start playing after loading initial_song */
@@ -241,6 +244,7 @@ enum {
 	O_HOOKS, O_NO_HOOKS,
 #endif
 	O_DISKWRITE,
+	O_SONGSAVE,
 	O_DEBUG,
 	O_VERSION,
 };
@@ -288,6 +292,7 @@ static void parse_options(int argc, char **argv)
 		{"play", 0, NULL, O_PLAY},
 		{"no-play", 0, NULL, O_NO_PLAY},
 		{"diskwrite", 1, NULL, O_DISKWRITE},
+		{"songsave", 1, NULL, O_SONGSAVE},
 		{"font-editor", 0, NULL, O_FONTEDIT},
 		{"no-font-editor", 0, NULL, O_NO_FONTEDIT},
 #if ENABLE_HOOKS
@@ -385,6 +390,9 @@ static void parse_options(int argc, char **argv)
 		case O_DISKWRITE:
 			diskwrite_to = optarg;
 			break;
+		case O_SONGSAVE:
+			songsave_to = optarg;
+			break;
 #if ENABLE_HOOKS
 		case O_HOOKS:
 			startup_flags |= SF_HOOKS;
@@ -423,6 +431,7 @@ static void parse_options(int argc, char **argv)
 				"  -f, --fullscreen (-F, --no-fullscreen)\n"
 				"  -p, --play (-P, --no-play)\n"
 				"      --diskwrite=FILENAME\n"
+				"      --songsave=FILENAME\n"
 				"      --font-editor (--no-font-editor)\n"
 #if ENABLE_HOOKS
 				"      --hooks (--no-hooks)\n"
@@ -1138,6 +1147,10 @@ int main(int argc, char **argv)
 						      : (multi ? "MWAV" : "WAV"));
 				if (song_export(diskwrite_to, driver) != SAVE_SUCCESS)
 					exit(1); // ?
+			} else if (songsave_to) {
+				if (song_save(songsave_to, "GIT") != SAVE_SUCCESS)
+					exit(1); // ?
+				exit(0);
 			} else if (startup_flags & SF_PLAY) {
 				song_start();
 				set_page(PAGE_INFO);
